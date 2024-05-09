@@ -8,10 +8,20 @@
 
 namespace loss {
 
-    template <typename Range, typename T = typename Range::value_type, std::invocable<T, T> F>
-    static constexpr T _apply_and_sum (F f, Range const& r0, Range const& r1) {
-        auto applied = std::views::zip_transform(f, r0, r1);
-        return std::ranges::fold_right(applied.begin(), applied.end(), 0, std::plus<>());
+    // anonimous namespace to hide apply_and_accumulate
+    namespace {
+        template <typename ...Ranges, std::invocable<typename Ranges::value_type...> F>
+        static constexpr decltype(auto) apply_and_accumulate (F f, Ranges const& ...rs) {
+            auto applied = std::views::zip_transform(f, rs...);
+            return std::ranges::fold_right(applied.begin(), applied.end(), 0, std::plus<>());
+        }
+    }
+
+    namespace distance {
+        template<typename T>
+        static constexpr T manhattan  (T t1, T t2) {
+            return std::abs(t1 - t2);
+        }
     }
 
     template <typename Range, typename T = typename Range::value_type>
@@ -25,10 +35,7 @@ namespace loss {
 
     template <typename Range, typename T = typename Range::value_type>
     static constexpr T L1_f (Range const& ground, Range const& predicted) {
-        auto abs_diff = [](T a, T b) -> T { 
-            return std::abs(a - b); 
-        };
-        return loss::_apply_and_sum(abs_diff, ground, predicted);
+        return loss::apply_and_accumulate(loss::distance::manhattan<T>, ground, predicted);
     }
 
     template <typename Range, typename T = typename Range::value_type>
@@ -45,7 +52,7 @@ namespace loss {
         auto euc_dist = [](T a, T b) -> T { 
             return std::pow(a - b, 2);
         };
-        return std::sqrt(loss::_apply_and_sum(euc_dist, ground, predicted));
+        return std::sqrt(loss::apply_and_accumulate(euc_dist, ground, predicted));
     }
 
     template <typename Range, typename T = typename Range::value_type>
@@ -77,7 +84,7 @@ namespace loss {
                 return threshold*std::abs(diff) - threshold/2;
             }
         };
-        return loss::_apply_and_sum(hbr, ground, predicted);
+        return loss::apply_and_accumulate(hbr, ground, predicted);
     }
 
     template <typename Range, typename T = typename Range::value_type>
@@ -96,7 +103,7 @@ namespace loss {
         auto f = [](T gnd, T pred) -> T {
             return gnd*std::log(pred) + (gnd - 1)*log(1 - pred);
         };
-        T bce = loss::_apply_and_sum(f, ground, predicted);
+        T bce = loss::apply_and_accumulate(f, ground, predicted);
         return -bce/std::ranges::size(ground);
     }
 
@@ -118,7 +125,7 @@ namespace loss {
         };
 
         
-        T ce = loss::_apply_and_sum(f, ground, predicted);
+        T ce = loss::apply_and_accumulate(f, ground, predicted);
         return -ce/std::ranges::size(ground);
     }
 
@@ -145,7 +152,7 @@ namespace loss {
             return gnd*std::log(gnd/pred);
         };
 
-        return loss::_apply_and_sum(f, ground, predicted);
+        return loss::apply_and_accumulate(f, ground, predicted);
     }
 
     template <typename Range, typename T = typename Range::value_type>
@@ -157,8 +164,7 @@ namespace loss {
             if (ground) {
                 return pow(dist, 2);
             } else{
-                T zero{0};
-                return pow(max(margin - dist, zero), 2);
+                return pow(max(margin - dist, T{0}), 2);
             }
         }();
     }
@@ -166,10 +172,19 @@ namespace loss {
     template <typename Range, typename T = typename Range::value_type>
     static constexpr T hinge (Range const& ground, Range const& predicted) {
         auto f = [](T gnd, T pred) -> T {
-            return std::max(0, 1 - gnd*pred);
+            return std::max(T{0}, T{1} - gnd*pred);
         };
 
-        return loss::_apply_and_sum(f, ground, predicted);
+        return loss::apply_and_accumulate(f, ground, predicted);
+    }
+
+    template <typename Range, typename T = typename Range::value_type>
+    static constexpr T tr (Range const& anchor, Range const& positive, Range const& negative, T const margin) {
+        // Triplet Ranking
+        T dist_pos = loss::L2_f(anchor, positive);
+        T dist_neg = loss::L2_f(anchor, negative);
+        
+        return std::max(dist_pos - dist_neg + margin, T{0});
     }
 }
 
@@ -198,6 +213,8 @@ int main () {
     std::cout << "softmax = "; print_range(loss::softmax(predicted));
     std::cout << "KL = " << loss::kl(ground, predicted) << std::endl;
     std::cout << "contrastive = " << loss::contrastive(1, ground, predicted, 2.0) << std::endl;
+    std::cout << "hinge = " << loss::hinge(ground, predicted) << std::endl;
+    std::cout << "Triplet Ranking = " << loss::tr(predicted, ground, predicted, 0.2) << std::endl;
     
     return 0;
 }
